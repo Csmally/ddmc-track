@@ -1,0 +1,38 @@
+{
+  "name": "@ddmc/track-runtime",
+  "version": "0.1.0",
+  "description": "ddmc 埋点 SDK 运行时包：全局 mixin 消费编译时包注入的 componentIndex / currentTrackPath",
+  "type": "module",
+  "main": "dist/index.cjs",
+  "module": "dist/index.mjs",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.mjs",
+      "require": "./dist/index.cjs"
+    }
+  },
+  "files": ["dist"],
+  "peerDependencies": {
+    "vue": "^2.6.0"
+  },
+  "peerDependenciesMeta": {
+    "vue": {
+      "optional": true
+    }
+  },
+  "scripts": {
+    "build": "rollup -c && tsc -p tsconfig.build.json",
+    "dev": "rollup -c -w",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@ddmc/track-shared": "workspace:*",
+    "@rollup/plugin-node-resolve": "^15.3.0",
+    "jsdom": "^24.0.0",
+    "rollup": "^4.24.0",
+    "rollup-plugin-esbuild": "^6.1.1",
+    "vue": "~2.6.14"
+  }
+}

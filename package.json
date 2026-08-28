@@ -1,0 +1,20 @@
+{
+  "name": "ddmc-track",
+  "version": "0.1.0",
+  "private": true,
+  "description": "ddmc 埋点 SDK monorepo（编译时包 + 运行时包）",
+  "scripts": {
+    "build": "pnpm -r --if-present run build",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit -p packages/shared && tsc --noEmit -p packages/compile && tsc --noEmit -p packages/runtime"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "prettier": "^3.3.3",
+    "typescript": "^5.5.4",
+    "vitest": "^2.1.9"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": ["esbuild"]
+  }
+}
