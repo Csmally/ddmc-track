@@ -1,0 +1,66 @@
+/**
+ * uni-app 内置原生组件标签（Vue2 端，各平台并集）+ Vue 内置组件与模板关键字。
+ * 命中这些标签的元素不参与 componentIndex 注入；可用 options.nativeTags 追加白名单。
+ */
+export const NATIVE_TAGS = new Set([
+  // 视图容器
+  'view',
+  'scroll-view',
+  'swiper',
+  'swiper-item',
+  'cover-view',
+  'cover-image',
+  'match-media',
+  'movable-area',
+  'movable-view',
+  // 基础内容
+  'text',
+  'rich-text',
+  'icon',
+  'progress',
+  // 表单
+  'button',
+  'checkbox',
+  'checkbox-group',
+  'editor',
+  'form',
+  'input',
+  'label',
+  'picker',
+  'picker-view',
+  'picker-view-column',
+  'radio',
+  'radio-group',
+  'slider',
+  'switch',
+  'textarea',
+  // 导航 / 媒体 / 画布 / 开放能力
+  'navigator',
+  'functional-page-navigator',
+  'navigation-bar',
+  'audio',
+  'camera',
+  'image',
+  'video',
+  'live-player',
+  'live-pusher',
+  'map',
+  'canvas',
+  'web-view',
+  'ad',
+  'ad-custom',
+  'official-account',
+  'open-data',
+  // 页面配置
+  'page-meta',
+  'page-container',
+  'root-portal',
+  // 模板关键字与 Vue 内置组件
+  'template',
+  'slot',
+  'block',
+  'component',
+  'transition',
+  'transition-group',
+  'keep-alive',
+])
