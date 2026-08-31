@@ -11,6 +11,8 @@
  *   形态如 home.vue 的 search-bar：homePage/0/pageContent/0/searchBar/0。
  * - __trackClick(hash)：编译期点击包装注入的调用目标（先于原 handler 执行），
  *   把点击事件汇入 $track：eventType 'click'，eventPath = currentTrackPath + '/' + hash。
+ * - mounted：发起曝光观察（exposure.ts）——根元素每次进入视口上报一次 exposure
+ *   （离开视口再露出会再报）。
  *
  * 注意：MP 端已验证 slot 子组件的 $parent 是 slot 宿主（pageContent）。
  */
@@ -20,12 +22,17 @@ import {
   TRACK_CLICK_METHOD,
   TRACK_PATH,
 } from '@ddmc/track-shared'
+import { observeExposure } from './exposure'
 
 interface TrackVm {
   $options: { name?: string }
   $parent?: TrackVm
+  /** mixin data（created 时沿 $parent 链计算赋值）——契约成员用共享常量的计算属性名 */
+  [TRACK_PATH]: string
+  [TRACK_CLASS]: string
   /** install 时挂到 Vue.prototype 的统一上报入口（见 index.ts） */
   $track: (eventType: string, eventPath: string, data?: Record<string, unknown>) => void
+  $on?: (event: string, fn: () => void) => void
   [key: string]: unknown
 }
 
@@ -61,7 +68,7 @@ export const trackMixin = {
     [TRACK_CLICK_METHOD](hash: string) {
       const vm = this as unknown as TrackVm
       // 点击事件汇入统一上报：eventPath = currentTrackPath + '/' + hash（事件 key）
-      vm.$track('click', `${vm[TRACK_PATH]}/${hash}`, {})
+      vm.$track('click', `${vm[TRACK_PATH]}/${hash}`)
     },
   },
   created(this: TrackVm) {
@@ -70,6 +77,7 @@ export const trackMixin = {
     this[TRACK_CLASS] = path.replace(/\//g, '-')
   },
   mounted(this: TrackVm) {
-    
+    // 曝光观察：根元素进入视口即上报一次（机制详见 exposure.ts，非 uni 环境自动跳过）
+    observeExposure(this)
   },
 }

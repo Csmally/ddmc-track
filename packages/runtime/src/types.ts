@@ -21,7 +21,8 @@ declare module 'vue/types/vue' {
     currentTrackPath: string
     /** 点击采集入口（mixin method，编译期注入的事件包装会调用） */
     __trackClick(hash: string, e?: unknown): void
-    /** 统一全局上报入口（业务手动埋点兜底与自动采集共用；eventPath 为追踪路径，如 homePage/0/searchBar/0） */
+    /** 统一全局上报入口（业务手动埋点兜底与自动采集共用；eventPath 为追踪路径，如 homePage/0/searchBar/0；
+     *  载荷 = 当前实例 data 全部字段 + otherData：可选参数 data，缺省 {}） */
     $track(eventType: string, eventPath: string, data?: Record<string, unknown>): void
   }
 }

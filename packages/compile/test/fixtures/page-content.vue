@@ -6,10 +6,7 @@
 
 <script>
 	export default {
-		name: 'pageContent',
-		mounted() {
-			console.log('9898 page-content mounted', this.$parent.$options.name)
-		}
+		name: 'pageContent'
 	}
 </script>
 
