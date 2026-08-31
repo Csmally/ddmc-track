@@ -12,7 +12,12 @@
  *
  * 注意：MP 端已验证 slot 子组件的 $parent 是 slot 宿主（pageContent）。
  */
-import { COMPONENT_INDEX_ATTR, TRACK_CLASS, TRACK_PATH } from '@ddmc/track-shared'
+import {
+  COMPONENT_INDEX_ATTR,
+  TRACK_CLASS,
+  TRACK_CLICK_METHOD,
+  TRACK_PATH,
+} from '@ddmc/track-shared'
 
 interface TrackVm {
   $options: { name?: string }
@@ -46,6 +51,14 @@ export const trackMixin = {
       [TRACK_PATH]: '',
       [TRACK_CLASS]: '',
     }
+  },
+  methods: {
+    // 编译期点击包装注入的调用目标：先于原 handler 执行（逗号序列左操作数）
+    [TRACK_CLICK_METHOD](hash: string) {
+      const vm = this as unknown as TrackVm
+      // 点击采集占位：hash 生成策略确定后接入 $track 上报（key = currentTrackPath + hash）
+      console.log('9898 runtime click', vm[TRACK_CLASS], hash)
+    },
   },
   created(this: TrackVm) {
     const path = collectTrackParts(this).join('/')

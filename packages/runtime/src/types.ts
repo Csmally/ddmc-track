@@ -19,5 +19,7 @@ declare module 'vue/types/vue' {
     currentTrackClass: string
     /** 追踪路径值（mixin data，created 时沿 $parent 链计算赋值） */
     currentTrackPath: string
+    /** 点击采集入口（mixin method，编译期注入的事件包装会调用） */
+    __trackClick(hash: string, e?: unknown): void
   }
 }

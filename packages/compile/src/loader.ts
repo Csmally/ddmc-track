@@ -10,6 +10,7 @@
 import { createRequire } from 'module'
 import { existsSync } from 'fs'
 import { dirname, join } from 'path'
+import { TRACK_CLICK_METHOD } from '@ddmc/track-shared'
 import type { CompileOptions } from './options'
 import { matchesFile } from './options'
 import { transformVueSource } from './transform'
@@ -83,6 +84,12 @@ function printReport(report: TransformReport) {
       lines.push(`  componentIndex 注入（${report.componentIndex.length} 处）：`)
       for (const item of report.componentIndex) {
         lines.push(`    <${item.tag}> → :componentIndex="${item.index}"`)
+      }
+    }
+    if (report.clicks.length > 0) {
+      lines.push(`  点击注入（${report.clicks.length} 处）：`)
+      for (const item of report.clicks) {
+        lines.push(`    <${item.tag}> ${item.event} → ${TRACK_CLICK_METHOD} 包裹`)
       }
     }
   }

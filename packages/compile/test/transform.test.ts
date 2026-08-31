@@ -165,6 +165,87 @@ describe('注入② currentTrackClass class', () => {
   })
 })
 
+describe('注入③ 点击包装', () => {
+  it('原生标签 @click 带参 → 逗号序列包裹，原表达式原样保留', () => {
+    const input = '<template><view @click="handleTap(x)"></view></template>'
+    const { code, report } = transformVueSource(input, {}, 'x.vue')
+    expect(code).toContain(`<view @click="(__trackClick('click', $event), handleTap(x))"`)
+    expect(report!.clicks).toEqual([{ tag: 'view', event: '@click' }])
+  })
+
+  it('裸方法名 → 补 ($event) 调用', () => {
+    const input = '<template><view @click="handleTap"></view></template>'
+    const { code } = transformVueSource(input, {}, 'x.vue')
+    expect(code).toContain(`<view @click="(__trackClick('click', $event), handleTap($event))"`)
+  })
+
+  it('@tap / v-on:click 同处理，修饰符属性名原样保留', () => {
+    const input =
+      '<template><view><view @tap="onTap()"></view><text v-on:click="onClick"></text><button @click.stop="onBtn"></button></view></template>'
+    const { code, report } = transformVueSource(input, {}, 'x.vue')
+    expect(code).toContain(`@tap="(__trackClick('click', $event), onTap())"`)
+    expect(code).toContain(`v-on:click="(__trackClick('click', $event), onClick($event))"`)
+    expect(code).toContain(`@click.stop="(__trackClick('click', $event), onBtn($event))"`)
+    expect(report!.clicks).toEqual([
+      { tag: 'view', event: '@tap' },
+      { tag: 'text', event: 'v-on:click' },
+      { tag: 'button', event: '@click.stop' },
+    ])
+  })
+
+  it('复杂表达式与 v-for 参数原样保留（闭包捕获，无需哨兵参数）', () => {
+    const input =
+      '<template><view v-for="(item, i) in list" :key="i" @click="count++ && fn(i, item.id)"></view></template>'
+    const { code } = transformVueSource(input, {}, 'x.vue')
+    expect(code).toContain(`@click="(__trackClick('click', $event), count++ && fn(i, item.id))"`)
+  })
+
+  it('自定义组件标签上的 @click 不注入点击（组件事件），仍注入 componentIndex', () => {
+    const input = '<template><view><my-card @click="onCard"></my-card></view></template>'
+    const { code, report } = transformVueSource(input, {}, 'x.vue')
+    expect(code).toContain('<my-card :componentIndex="0" @click="onCard">')
+    expect(report!.clicks).toEqual([])
+  })
+
+  it('非点击事件（@input/@change）不动', () => {
+    const input =
+      '<template><view><input @input="onInput" @change="onChange"></input></view></template>'
+    const { code, report } = transformVueSource(input, {}, 'x.vue')
+    expect(code).toContain('@input="onInput"')
+    expect(code).toContain('@change="onChange"')
+    expect(report!.clicks).toEqual([])
+  })
+
+  it('无引号值形态（@click 无表达式）→ 防御跳过', () => {
+    const input = '<template><view @click></view></template>'
+    const { report } = transformVueSource(input, {}, 'x.vue')
+    expect(report!.clicks).toEqual([])
+  })
+
+  it('幂等：重复转换不二次包裹', () => {
+    const input = '<template><view @click="fn(x)"></view></template>'
+    const first = transformVueSource(input, {}, 'x.vue')
+    const second = transformVueSource(first.code, {}, 'x.vue')
+    expect(second.code).toBe(first.code)
+  })
+
+  it('与注入①②共存：根元素点击 + 类注入 + 组件 index', () => {
+    const input = '<template><view @click="fn()"><my-card></my-card></view></template>'
+    const { code, report } = transformVueSource(input, {}, 'x.vue')
+    expect(code).toContain(
+      `<view @click="(__trackClick('click', $event), fn())" :class="currentTrackClass">`,
+    )
+    expect(code).toContain('<my-card :componentIndex="0">')
+    expect(report!.clicks).toEqual([{ tag: 'view', event: '@click' }])
+  })
+
+  it('nativeTags 扩展的原生标签也参与点击注入', () => {
+    const input = '<template><view><my-native @tap="fn()"></my-native></view></template>'
+    const { code } = transformVueSource(input, { nativeTags: ['my-native'] }, 'x.vue')
+    expect(code).toContain(`<my-native @tap="(__trackClick('click', $event), fn())"`)
+  })
+})
+
 describe('边界与幂等', () => {
   it('幂等：重复转换结果不变', () => {
     const input = fixture('home.vue')

@@ -59,6 +59,23 @@ describe('trackMixin', () => {
   })
 })
 
+describe('__trackClick 点击采集入口', () => {
+  it('mixin 提供 __trackClick 方法：打印 currentTrackClass + hash', () => {
+    const spy = vi.spyOn(console, 'log').mockImplementation(() => {})
+    const Child = makeChild()
+    const Parent = Vue.extend({
+      components: { Child },
+      render: (h) => h('child', { ref: 'child', attrs: { componentIndex: 1 } }),
+    })
+    const vm = new Parent().$mount()
+    vm.$refs.child.__trackClick('click')
+
+    // mounted 一行 + 点击一行
+    expect(spy).toHaveBeenCalledTimes(2)
+    expect(spy.mock.calls[1]).toEqual(['9898 runtime click', 'searchBar-1', 'click'])
+  })
+})
+
 describe('currentTrackPath / currentTrackClass 路径链', () => {
   function makeComponent(name: string) {
     return Vue.extend({ mixins: [trackMixin], name, render: (h) => h('view') })

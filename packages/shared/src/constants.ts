@@ -12,3 +12,6 @@ export const TRACK_CLASS = 'currentTrackClass'
 
 // 追踪路径值成员名（运行时 mixin computed，形态如 homePage.pageContent[0].searchBar[0]）
 export const TRACK_PATH = 'currentTrackPath'
+
+// 点击采集：编译期把带 @click/@tap 的原生标签事件值包成对该 mixin 方法的调用
+export const TRACK_CLICK_METHOD = '__trackClick'

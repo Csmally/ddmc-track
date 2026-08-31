@@ -19,7 +19,7 @@
  */
 
 import { createRequire } from 'module'
-import { COMPONENT_INDEX_ATTR, TRACK_CLASS } from '@ddmc/track-shared'
+import { COMPONENT_INDEX_ATTR, TRACK_CLASS, TRACK_CLICK_METHOD } from '@ddmc/track-shared'
 import type { AstElement, SFCBlock } from 'vue-template-compiler'
 import { NATIVE_TAGS } from './native-tags'
 import type { CompileOptions } from './options'
@@ -66,6 +66,8 @@ export interface TransformReport {
   componentIndex: Array<{ tag: string; index: number }>
   /** 注入②结果 */
   rootClass: RootClassStatus
+  /** 注入③明细（点击事件包装） */
+  clicks: Array<{ tag: string; event: string }>
   /** 整次转换跳过时记录原因 */
   skipped?: string
 }
@@ -125,7 +127,7 @@ export function transformVueSource(
   compiler?: TemplateCompiler,
 ): TransformResult {
   const { parseComponent, compile } = compiler ?? getLocalCompiler()
-  const report: TransformReport = { file, componentIndex: [], rootClass: 'skipped-no-root' }
+  const report: TransformReport = { file, componentIndex: [], clicks: [], rootClass: 'skipped-no-root' }
   if (options.disabled) {
     report.skipped = 'disabled'
     return { code: source, report }
@@ -170,24 +172,46 @@ export function transformVueSource(
   const walk = (node: AstElement) => {
     if (node.type !== 1 || node.tag === undefined) return
     const tag = node.tag
-    if (node === ast) {
-      // 根元素位置总是先取（注入②需要，无论根是否参与注入①）
-      rootTagOpen = scan.findTagOpen(tag)
-    }
+    const clickAttrs = collectClickAttrs(node)
     const isInjectTarget =
       node.component === undefined && // <component :is> 动态组件跳过
       !NATIVE_TAGS.has(tag) &&
       !extraNative.includes(tag) &&
       !hasComponentIndex(node) // 幂等：已注入过则不再插入
 
-    if (isInjectTarget) {
-      const tagOpen = node === ast ? rootTagOpen : scan.findTagOpen(tag)
-      if (tagOpen !== -1) {
-        const index = counters.get(tag) ?? 0
-        counters.set(tag, index + 1)
-        const pos = tagOpen + 1 + tag.length
-        edits.push({ start: pos, end: pos, text: ` :${COMPONENT_INDEX_ATTR}="${index}"` })
-        report.componentIndex.push({ tag, index })
+    // 每个节点至多定位一次开标签（扫描器按文档序前进，多调会取到下一个同名标签）
+    const needTagOpen = node === ast || isInjectTarget || clickAttrs.length > 0
+    const tagOpen = needTagOpen ? scan.findTagOpen(tag) : -1
+    if (node === ast) {
+      // 根元素位置总是先取（注入②需要，无论根是否参与注入）
+      rootTagOpen = tagOpen
+    }
+
+    if (isInjectTarget && tagOpen !== -1) {
+      const index = counters.get(tag) ?? 0
+      counters.set(tag, index + 1)
+      const pos = tagOpen + 1 + tag.length
+      edits.push({ start: pos, end: pos, text: ` :${COMPONENT_INDEX_ATTR}="${index}"` })
+      report.componentIndex.push({ tag, index })
+    }
+
+    // 注入③：点击包装（只对原生标签；自定义组件标签上的 @click 是组件事件，不注入，
+    // 真正的可点元素在组件自身模板里，那个文件会单独过 loader）
+    const isNativeTag = NATIVE_TAGS.has(tag) || extraNative.includes(tag)
+    if (isNativeTag && clickAttrs.length > 0 && tagOpen !== -1) {
+      const openEnd = findInsertPosInOpenTag(body, tagOpen)
+      const openTag = body.slice(tagOpen, openEnd + 1)
+      for (const attr of clickAttrs) {
+        const wrapped = wrapClickValue(attr.value)
+        if (wrapped === null) continue // 幂等：已注入过
+        const pos = findAttrValueInOpenTag(openTag, attr.name)
+        if (!pos) continue // 防御：定位失败不注入
+        edits.push({
+          start: tagOpen + pos.valueStart,
+          end: tagOpen + pos.valueEnd,
+          text: wrapped,
+        })
+        report.clicks.push({ tag, event: attr.name })
       }
     }
     // 无论是否注入都继续遍历（找不到位置只是防御性场景，不能截断子树）
@@ -227,6 +251,54 @@ function hasComponentIndex(node: AstElement): boolean {
   return list.some(
     (a) => a.name === `:${COMPONENT_INDEX_ATTR}` || a.name === `v-bind:${COMPONENT_INDEX_ATTR}`,
   )
+}
+
+// ===== 注入③：点击事件包装 =====
+
+/** 点击采集覆盖的事件（含修饰符形态，如 @click.stop 按前缀匹配） */
+const CLICK_EVENTS = ['@click', '@tap', 'v-on:click', 'v-on:tap']
+
+// TODO: hash 生成策略后续确定，先写死占位
+const CLICK_HASH_PLACEHOLDER = 'click'
+
+// 与 Vue 编译器 simplePathRE 同款判定：裸方法路径按方法引用处理，其余按表达式包括号
+const SIMPLE_PATH_RE =
+  /^[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*|\['[^']*?']|\["[^"]*?"]|\[\d+]|\[[A-Za-z_$][\w$]*])*$/
+
+/** 节点上待包装的点击事件属性（attrsList 原始名，含修饰符） */
+function collectClickAttrs(node: AstElement): Array<{ name: string; value: string }> {
+  const list = node.attrsList ?? []
+  return list
+    .filter((a) => CLICK_EVENTS.some((ev) => a.name === ev || a.name.startsWith(`${ev}.`)))
+    .map((a) => ({ name: a.name, value: String(a.value ?? '') }))
+}
+
+/**
+ * 生成包装后的属性值（方案 F：逗号序列，先上报、后原样执行原表达式）。
+ * 逗号运算符优先级最低，右操作数（原表达式）无需括号；
+ * 裸方法路径需补 ($event) 调用；空表达式只留上报调用；返回 null 表示跳过（已注入过）。
+ */
+function wrapClickValue(raw: string): string | null {
+  const trimmed = raw.trim()
+  if (trimmed.includes(`${TRACK_CLICK_METHOD}(`)) return null
+  if (trimmed === '') return `${TRACK_CLICK_METHOD}('${CLICK_HASH_PLACEHOLDER}', $event)`
+  const call = SIMPLE_PATH_RE.test(trimmed) ? `${trimmed}($event)` : raw
+  return `(${TRACK_CLICK_METHOD}('${CLICK_HASH_PLACEHOLDER}', $event), ${call})`
+}
+
+/** 在开标签文本里定位某属性值区间（不含引号），找不到返回 null */
+function findAttrValueInOpenTag(
+  openTag: string,
+  attrName: string,
+): { valueStart: number; valueEnd: number } | null {
+  const re = new RegExp(`(?:\\s|^)${escapeRegExp(attrName)}\\s*=\\s*(['"])`)
+  const m = re.exec(openTag)
+  if (!m) return null
+  const quote = m[1]
+  const valueStart = m.index + m[0].length
+  const closeIdx = openTag.indexOf(quote, valueStart)
+  if (closeIdx === -1) return null
+  return { valueStart, valueEnd: closeIdx }
 }
 
 /** 注入②：根元素 currentTrackClass 绑定（在开标签文本里定位/合并 class 属性） */
