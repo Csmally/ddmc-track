@@ -11,7 +11,7 @@ packages/
 
 ## @ddmc/track-compile 编译时包
 
-在 uni-app（Vue2，vue-cli 5 / webpack）构建管线中对 `.vue` 模板做两类注入（**构建管线内存转换，不改磁盘源文件**）：
+在 uni-app（Vue2，vue-cli 5 / webpack）构建管线中对 `.vue` 模板做三类注入（**构建管线内存转换，不改磁盘源文件**）：
 
 ### 注入① componentIndex（槽位级标识）
 
@@ -47,6 +47,25 @@ packages/
 <!-- 转换后 -->
 <view :class="[className, currentTrackClass]">…</view>
 ```
+
+### 注入③ 点击事件包装（事件 key = 表达式哈希）
+
+原生标签（view/text/button…，含 nativeTags 扩展）上的 `@click` / `@tap`（含 `v-on:` 拼写与修饰符）事件值被包装成"先上报、后执行"的逗号序列，运行时 mixin 的 `__trackClick(key, $event)` 先于原表达式执行：
+
+```html
+<!-- 转换前 -->
+<view @click="handleTap(x)"></view>
+<view @tap="testTap3('AA')"></view>
+
+<!-- 转换后 -->
+<view @click="(__trackClick('j86v', $event), handleTap(x))"></view>
+<view @tap="(__trackClick('f4u4', $event), testTap3('AA'))"></view>
+```
+
+- **事件 key 为原表达式（trim 后）的直接哈希**：FNV-1a 32 位散列取低 4 位 base36，如 `testTap3('AA')` → `f4u4`——相同源码必得相同 key，不同表达式碰撞概率可忽略（36⁴ ≈ 168 万组合）
+- 无提取/去重/兜底等额外逻辑；哈希输出纯字母数字，可直接嵌入单引号字符串，无需转义
+- 裸方法名自动补 `($event)` 调用；复杂表达式、嵌套括号参数原样保留（闭包捕获 v-for 参数）
+- 自定义组件标签上的 `@click` 是组件事件，不注入（真正的可点元素在组件自身模板里，那个文件会单独过 loader）
 
 ### 接入方式（vue.config.js）
 
@@ -95,6 +114,7 @@ module.exports = {
 - `componentIndex`：注入到组件标签的 prop（未声明时经 Vue2 `$attrs` 传递给组件），运行时 mixin 消费后拼接路径段
 - `currentTrackClass`：组件根元素 class 绑定，运行时 mixin 必须提供同名响应式 computed，**安装运行时包 mixin 是注入生效的前提**
 - `currentTrackPath`：追踪路径值（运行时 mixin computed，后续实现 `$options.name`（驼峰）+ `[$attrs.componentIndex]` + `$parent.currentTrackPath` 链式上溯，含页面实例段）
+- `__trackClick(key, $event)`：点击包装的运行时入口（mixin method），key 即注入③ 的事件 key（表达式 FNV-1a 4 位哈希）；key 与路径的拼接入上报链路待运行时包实现
 - 契约常量定义在 `@ddmc/track-shared`，两端禁止硬编码同名字符串
 
 ### 配置项（CompileOptions）
@@ -114,15 +134,20 @@ module.exports = {
 ```js
 // main.js
 import ddmcTrack from '@ddmc/track-runtime'
-Vue.use(ddmcTrack) // 内部 Vue.mixin(trackMixin)，必须在 $mount 之前
+Vue.use(ddmcTrack) // 内部 Vue.mixin(trackMixin) 并把 $track 挂到 Vue.prototype，必须在 $mount 之前
+
+// 业务代码（手动埋点兜底）
+this.$track('addCart', 'homePage/0/goodsGrid/0', { goodsId: 42, count: 1 })
 ```
 
 当前行为：
 
-- **props.componentIndex**：mixin 声明了该 prop（编译时包注入的 `:componentIndex="N"` 经 Vue2 attrs→props 匹配进入组件），组件内可直接 `this.componentIndex` 读取；`mounted` 时被注入的组件会打印 `[ddmc-track] mounted <组件名> componentIndex = N`（未注入的组件不打印）
-- **computed.currentTrackPath**：追踪路径值，沿 `$parent` 链上溯拼接——段 = 驼峰 `$options.name` 与 componentIndex（**未注入时按 0**，页面实例即此形态，如 `homePage/0`）；App 实例终止链（自身路径为空）；无 name 的实例跳过段、链继续。home.vue 示例：`homePage/0/pageContent/0/searchBar/0`、`homePage/0/pageContent/0/bannerSwiper/1`
-- **computed.currentTrackClass**：`currentTrackPath` 的类名安全形态（`/` 换成 `-`，如 `homePage-0-pageContent-0-bannerSwiper-1`），绑定到组件根元素 class 上
-- 类型增强随包发布：消费方获得 `this.componentIndex` / `this.currentTrackClass` / `this.currentTrackPath` 的类型提示
+- **props.componentIndex**：mixin 声明了该 prop（编译时包注入的 `:componentIndex="N"` 经 Vue2 attrs→props 匹配进入组件），组件内可直接 `this.componentIndex` 读取
+- **data.currentTrackPath**：追踪路径值，沿 `$parent` 链上溯拼接——段 = 驼峰 `$options.name` 与 componentIndex（**未注入时按 0**，页面实例即此形态，如 `homePage/0`）；App 实例终止链（自身路径为空）；无 name 的实例跳过段、链继续。home.vue 示例：`homePage/0/pageContent/0/searchBar/0`、`homePage/0/pageContent/0/bannerSwiper/1`
+- **data.currentTrackClass**：`currentTrackPath` 的类名安全形态（`/` 换成 `-`，如 `homePage-0-pageContent-0-bannerSwiper-1`），绑定到组件根元素 class 上（用 data 而非 computed：小程序 wx data 只收集 data/methods，mixin 的 computed 不会进 WXML 绑定）
+- **Vue.prototype.$track(eventType, eventPath, data)**：统一全局上报入口（install 时挂载，任意组件实例可 `this.$track` 调用；业务手动埋点兜底，自动采集事件最终也走这里）；当前为占位打印实现，队列/上报/会话/上下文方案确定后接入
+- **methods.__trackClick(hash)**：编译期点击包装注入的调用目标（先于原 handler 执行），把点击事件汇入 `$track`：eventType 为 `click`，eventPath = currentTrackPath + `/` + hash
+- 类型增强随包发布：消费方获得 `this.componentIndex` / `this.currentTrackClass` / `this.currentTrackPath` / `this.$track` 的类型提示
 - **平台注意**：MP 端已验证 slot 子组件的 `$parent` 是 slot 宿主（pageContent），路径含 pageContent 段；H5 端（uni-h5 运行时）链式行为待接入 market 时验证
 
 ### 限制与说明

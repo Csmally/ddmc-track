@@ -9,6 +9,8 @@
  *   data 与 methods（uni initData），mixin 的 computed 不会进入 WXML 绑定，
  *   类绑定会一直为空；data 赋值会被同步。组件树静态，created 算一次即可。
  *   形态如 home.vue 的 search-bar：homePage/0/pageContent/0/searchBar/0。
+ * - __trackClick(hash)：编译期点击包装注入的调用目标（先于原 handler 执行），
+ *   把点击事件汇入 $track：eventType 'click'，eventPath = currentTrackPath + '/' + hash。
  *
  * 注意：MP 端已验证 slot 子组件的 $parent 是 slot 宿主（pageContent）。
  */
@@ -22,6 +24,8 @@ import {
 interface TrackVm {
   $options: { name?: string }
   $parent?: TrackVm
+  /** install 时挂到 Vue.prototype 的统一上报入口（见 index.ts） */
+  $track: (eventType: string, eventPath: string, data?: Record<string, unknown>) => void
   [key: string]: unknown
 }
 
@@ -56,8 +60,8 @@ export const trackMixin = {
     // 编译期点击包装注入的调用目标：先于原 handler 执行（逗号序列左操作数）
     [TRACK_CLICK_METHOD](hash: string) {
       const vm = this as unknown as TrackVm
-      // 点击采集占位：hash 生成策略确定后接入 $track 上报（key = currentTrackPath + hash）
-      console.log('9898 runtime click', vm[TRACK_CLASS], hash)
+      // 点击事件汇入统一上报：eventPath = currentTrackPath + '/' + hash（事件 key）
+      vm.$track('click', `${vm[TRACK_PATH]}/${hash}`, {})
     },
   },
   created(this: TrackVm) {
@@ -66,8 +70,6 @@ export const trackMixin = {
     this[TRACK_CLASS] = path.replace(/\//g, '-')
   },
   mounted(this: TrackVm) {
-    // if (this.$options.name === 'bannerSwiper') {
-    // }
-    console.log('9898 runtime', this[TRACK_CLASS])
+    
   },
 }

@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import Vue from 'vue'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { install, trackMixin } from '../src/index'
+import { install, track, trackMixin } from '../src/index'
 
 afterEach(() => {
   vi.restoreAllMocks()
@@ -16,32 +16,6 @@ function makeChild() {
 }
 
 describe('trackMixin', () => {
-  it('mounted 打印 currentTrackClass（注入的 componentIndex 参与路径）', () => {
-    const spy = vi.spyOn(console, 'log').mockImplementation(() => {})
-    const Child = makeChild()
-    const Parent = Vue.extend({
-      components: { Child },
-      render: (h) => h('child', { attrs: { componentIndex: 2 } }),
-    })
-    new Parent().$mount()
-
-    expect(spy).toHaveBeenCalledTimes(1)
-    expect(spy.mock.calls[0]).toEqual(['9898 runtime', 'searchBar-2'])
-  })
-
-  it('mounted 对未注入 componentIndex 的组件打印 index 按 0 的路径', () => {
-    const spy = vi.spyOn(console, 'log').mockImplementation(() => {})
-    const Child = makeChild()
-    const Parent = Vue.extend({
-      components: { Child },
-      render: (h) => h('child'),
-    })
-    new Parent().$mount()
-
-    expect(spy).toHaveBeenCalledTimes(1)
-    expect(spy.mock.calls[0]).toEqual(['9898 runtime', 'searchBar-0'])
-  })
-
   it('this.componentIndex 以 prop 形式可读', () => {
     const Child = makeChild()
     const Parent = Vue.extend({
@@ -52,27 +26,73 @@ describe('trackMixin', () => {
     expect(vm.$refs.child.componentIndex).toBe(3)
   })
 
-  it('install 向 vue 注册全局 mixin', () => {
+  it('install 注册全局 mixin，并把 $track 挂到 Vue.prototype', () => {
     let registered: unknown
-    install({ mixin: (m) => (registered = m) })
+    const proto: Record<string, unknown> = {}
+    install({ mixin: (m) => (registered = m), prototype: proto })
     expect(registered).toBe(trackMixin)
+    expect(proto.$track).toBe(track)
   })
 })
 
 describe('__trackClick 点击采集入口', () => {
-  it('mixin 提供 __trackClick 方法：打印 currentTrackClass + hash', () => {
-    const spy = vi.spyOn(console, 'log').mockImplementation(() => {})
+  afterEach(() => {
+    delete (Vue.prototype as Record<string, unknown>).$track
+  })
+
+  it('点击事件汇入 $track：eventType=click，eventPath=currentTrackPath/hash', () => {
+    const trackSpy = vi.fn()
+    ;(Vue.prototype as Record<string, unknown>).$track = trackSpy
     const Child = makeChild()
     const Parent = Vue.extend({
       components: { Child },
       render: (h) => h('child', { ref: 'child', attrs: { componentIndex: 1 } }),
     })
     const vm = new Parent().$mount()
-    vm.$refs.child.__trackClick('click')
+    vm.$refs.child.__trackClick('f4u4')
 
-    // mounted 一行 + 点击一行
-    expect(spy).toHaveBeenCalledTimes(2)
-    expect(spy.mock.calls[1]).toEqual(['9898 runtime click', 'searchBar-1', 'click'])
+    expect(trackSpy).toHaveBeenCalledTimes(1)
+    expect(trackSpy).toHaveBeenCalledWith('click', 'searchBar/1/f4u4', {})
+  })
+})
+
+describe('$track 全局上报入口（Vue.prototype）', () => {
+  afterEach(() => {
+    delete (Vue.prototype as Record<string, unknown>).$track
+  })
+
+  it('三参数（eventType/eventPath/data）原样上报占位，任意实例可调用', () => {
+    const spy = vi.spyOn(console, 'log').mockImplementation(() => {})
+    ;(Vue.prototype as Record<string, unknown>).$track = track
+    const Child = makeChild()
+    const Parent = Vue.extend({
+      components: { Child },
+      render: (h) => h('child', { ref: 'child', attrs: { componentIndex: 1 } }),
+    })
+    const vm = new Parent().$mount()
+    vm.$refs.child.$track('addCart', 'homePage/0/goodsGrid/0', { goodsId: 42, count: 1 })
+
+    expect(spy).toHaveBeenCalledTimes(1)
+    expect(spy.mock.calls[0]).toEqual([
+      '9898 runtime track',
+      'addCart',
+      'homePage/0/goodsGrid/0',
+      { goodsId: 42, count: 1 },
+    ])
+  })
+
+  it('data 缺省时按空对象上报', () => {
+    const spy = vi.spyOn(console, 'log').mockImplementation(() => {})
+    ;(Vue.prototype as Record<string, unknown>).$track = track
+    const Child = makeChild()
+    const Parent = Vue.extend({
+      components: { Child },
+      render: (h) => h('child', { ref: 'child' }),
+    })
+    const vm = new Parent().$mount()
+    vm.$refs.child.$track('click', 'x/0')
+
+    expect(spy.mock.calls[0]).toEqual(['9898 runtime track', 'click', 'x/0', {}])
   })
 })
 

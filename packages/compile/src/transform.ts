@@ -1,5 +1,5 @@
 /**
- * 核心转换：对 .vue 源码做两类模板注入（外科手术式字符串插入，其余字节不动）。
+ * 核心转换：对 .vue 源码做三类模板注入（外科手术式字符串插入，其余字节不动）。
  *
  * 注入①：自定义组件标签（非 uni-app 原生组件）加 :componentIndex="N"
  *        ——同类标签从 0 计数（槽位级标识），每个文件独立计数；
@@ -9,6 +9,10 @@
  *        ——页面模板根为 page-content 时跳过（该元素由页面路由标识）；
  *          已有动态 :class 时把原表达式包进 [原值, currentTrackClass]；
  *          否则在开标签末尾追加独立 :class（静态 class 与 :class 由 Vue 自动合并）。
+ * 注入③：原生标签 @click/@tap 事件值包装成"先上报、后执行"的逗号序列。
+ *        事件 key 为原表达式（trim 后）的直接哈希：FNV-1a 32 位取低 4 位 base36，
+ *        相同源码必得相同 key，不同表达式碰撞概率可忽略（36^4 ≈ 168 万）；
+ *        自定义组件标签上的 @click 是组件事件，不注入。
  *
  * 定位方式：不依赖编译器的 outputSourceRange——生产构建（NODE_ENV=production）下
  * vue-template-compiler 不输出 range（实测 ast.start 为 undefined），会导致注入全挂。
@@ -67,7 +71,7 @@ export interface TransformReport {
   /** 注入②结果 */
   rootClass: RootClassStatus
   /** 注入③明细（点击事件包装） */
-  clicks: Array<{ tag: string; event: string }>
+  clicks: Array<{ tag: string; event: string; hash: string }>
   /** 整次转换跳过时记录原因 */
   skipped?: string
 }
@@ -202,16 +206,17 @@ export function transformVueSource(
       const openEnd = findInsertPosInOpenTag(body, tagOpen)
       const openTag = body.slice(tagOpen, openEnd + 1)
       for (const attr of clickAttrs) {
-        const wrapped = wrapClickValue(attr.value)
-        if (wrapped === null) continue // 幂等：已注入过
+        if (attr.value.trim().includes(`${TRACK_CLICK_METHOD}(`)) continue // 幂等：已注入过
         const pos = findAttrValueInOpenTag(openTag, attr.name)
         if (!pos) continue // 防御：定位失败不注入
+        const hash = clickKey(attr.value)
+        const wrapped = wrapClickValue(attr.value, hash)
         edits.push({
           start: tagOpen + pos.valueStart,
           end: tagOpen + pos.valueEnd,
           text: wrapped,
         })
-        report.clicks.push({ tag, event: attr.name })
+        report.clicks.push({ tag, event: attr.name, hash })
       }
     }
     // 无论是否注入都继续遍历（找不到位置只是防御性场景，不能截断子树）
@@ -258,9 +263,6 @@ function hasComponentIndex(node: AstElement): boolean {
 /** 点击采集覆盖的事件（含修饰符形态，如 @click.stop 按前缀匹配） */
 const CLICK_EVENTS = ['@click', '@tap', 'v-on:click', 'v-on:tap']
 
-// TODO: hash 生成策略后续确定，先写死占位
-const CLICK_HASH_PLACEHOLDER = 'click'
-
 // 与 Vue 编译器 simplePathRE 同款判定：裸方法路径按方法引用处理，其余按表达式包括号
 const SIMPLE_PATH_RE =
   /^[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*|\['[^']*?']|\["[^"]*?"]|\[\d+]|\[[A-Za-z_$][\w$]*])*$/
@@ -274,16 +276,32 @@ function collectClickAttrs(node: AstElement): Array<{ name: string; value: strin
 }
 
 /**
+ * 事件 key：原表达式（trim 后）直接哈希为 4 位 base36 字符串。
+ * FNV-1a 32 位散列取低 4 位数字（36^4 ≈ 168 万组合，组件内碰撞概率可忽略）；
+ * 相同源码必得相同 key，无需提取/去重/兜底逻辑，输出纯字母数字可直接嵌入单引号字符串。
+ */
+function clickKey(raw: string): string {
+  const source = raw.trim()
+  let h = 0x811c9dc5
+  for (let i = 0; i < source.length; i++) {
+    h ^= source.charCodeAt(i)
+    h = Math.imul(h, 0x01000193)
+  }
+  return ((h >>> 0) % 1679616).toString(36).padStart(4, '0')
+}
+
+/**
  * 生成包装后的属性值（方案 F：逗号序列，先上报、后原样执行原表达式）。
  * 逗号运算符优先级最低，右操作数（原表达式）无需括号；
- * 裸方法路径需补 ($event) 调用；空表达式只留上报调用；返回 null 表示跳过（已注入过）。
+ * 裸方法路径需补 ($event) 调用；空表达式只留上报调用。
+ * key 为事件标识（原表达式的 4 位哈希，见 clickKey）；
+ * 幂等检测（值里已有 __trackClick( 调用）由 walk 在取 key 之前完成，不在此处理。
  */
-function wrapClickValue(raw: string): string | null {
+function wrapClickValue(raw: string, key: string): string {
   const trimmed = raw.trim()
-  if (trimmed.includes(`${TRACK_CLICK_METHOD}(`)) return null
-  if (trimmed === '') return `${TRACK_CLICK_METHOD}('${CLICK_HASH_PLACEHOLDER}', $event)`
+  if (trimmed === '') return `${TRACK_CLICK_METHOD}('${key}', $event)`
   const call = SIMPLE_PATH_RE.test(trimmed) ? `${trimmed}($event)` : raw
-  return `(${TRACK_CLICK_METHOD}('${CLICK_HASH_PLACEHOLDER}', $event), ${call})`
+  return `(${TRACK_CLICK_METHOD}('${key}', $event), ${call})`
 }
 
 /** 在开标签文本里定位某属性值区间（不含引号），找不到返回 null */

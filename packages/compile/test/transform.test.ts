@@ -169,27 +169,27 @@ describe('注入③ 点击包装', () => {
   it('原生标签 @click 带参 → 逗号序列包裹，原表达式原样保留', () => {
     const input = '<template><view @click="handleTap(x)"></view></template>'
     const { code, report } = transformVueSource(input, {}, 'x.vue')
-    expect(code).toContain(`<view @click="(__trackClick('click', $event), handleTap(x))"`)
-    expect(report!.clicks).toEqual([{ tag: 'view', event: '@click' }])
+    expect(code).toContain(`<view @click="(__trackClick('j86v', $event), handleTap(x))"`)
+    expect(report!.clicks).toEqual([{ tag: 'view', event: '@click', hash: 'j86v' }])
   })
 
   it('裸方法名 → 补 ($event) 调用', () => {
     const input = '<template><view @click="handleTap"></view></template>'
     const { code } = transformVueSource(input, {}, 'x.vue')
-    expect(code).toContain(`<view @click="(__trackClick('click', $event), handleTap($event))"`)
+    expect(code).toContain(`<view @click="(__trackClick('ms9g', $event), handleTap($event))"`)
   })
 
   it('@tap / v-on:click 同处理，修饰符属性名原样保留', () => {
     const input =
       '<template><view><view @tap="onTap()"></view><text v-on:click="onClick"></text><button @click.stop="onBtn"></button></view></template>'
     const { code, report } = transformVueSource(input, {}, 'x.vue')
-    expect(code).toContain(`@tap="(__trackClick('click', $event), onTap())"`)
-    expect(code).toContain(`v-on:click="(__trackClick('click', $event), onClick($event))"`)
-    expect(code).toContain(`@click.stop="(__trackClick('click', $event), onBtn($event))"`)
+    expect(code).toContain(`@tap="(__trackClick('mtyy', $event), onTap())"`)
+    expect(code).toContain(`v-on:click="(__trackClick('jjbc', $event), onClick($event))"`)
+    expect(code).toContain(`@click.stop="(__trackClick('47g8', $event), onBtn($event))"`)
     expect(report!.clicks).toEqual([
-      { tag: 'view', event: '@tap' },
-      { tag: 'text', event: 'v-on:click' },
-      { tag: 'button', event: '@click.stop' },
+      { tag: 'view', event: '@tap', hash: 'mtyy' },
+      { tag: 'text', event: 'v-on:click', hash: 'jjbc' },
+      { tag: 'button', event: '@click.stop', hash: '47g8' },
     ])
   })
 
@@ -197,7 +197,7 @@ describe('注入③ 点击包装', () => {
     const input =
       '<template><view v-for="(item, i) in list" :key="i" @click="count++ && fn(i, item.id)"></view></template>'
     const { code } = transformVueSource(input, {}, 'x.vue')
-    expect(code).toContain(`@click="(__trackClick('click', $event), count++ && fn(i, item.id))"`)
+    expect(code).toContain(`@click="(__trackClick('8tv4', $event), count++ && fn(i, item.id))"`)
   })
 
   it('自定义组件标签上的 @click 不注入点击（组件事件），仍注入 componentIndex', () => {
@@ -233,16 +233,84 @@ describe('注入③ 点击包装', () => {
     const input = '<template><view @click="fn()"><my-card></my-card></view></template>'
     const { code, report } = transformVueSource(input, {}, 'x.vue')
     expect(code).toContain(
-      `<view @click="(__trackClick('click', $event), fn())" :class="currentTrackClass">`,
+      `<view @click="(__trackClick('nz1m', $event), fn())" :class="currentTrackClass">`,
     )
     expect(code).toContain('<my-card :componentIndex="0">')
-    expect(report!.clicks).toEqual([{ tag: 'view', event: '@click' }])
+    expect(report!.clicks).toEqual([{ tag: 'view', event: '@click', hash: 'nz1m' }])
   })
 
   it('nativeTags 扩展的原生标签也参与点击注入', () => {
     const input = '<template><view><my-native @tap="fn()"></my-native></view></template>'
     const { code } = transformVueSource(input, { nativeTags: ['my-native'] }, 'x.vue')
-    expect(code).toContain(`<my-native @tap="(__trackClick('click', $event), fn())"`)
+    expect(code).toContain(`<my-native @tap="(__trackClick('nz1m', $event), fn())"`)
+  })
+
+  it('事件 key：相同源码哈希相同（相同表达式共享同一 key）', () => {
+    const input =
+      '<template><view><view @click="fn"></view><text @click="fn"></text></view></template>'
+    const { code, report } = transformVueSource(input, {}, 'x.vue')
+    expect(code).toContain(`__trackClick('8udx', $event)`)
+    expect(report!.clicks).toEqual([
+      { tag: 'view', event: '@click', hash: '8udx' },
+      { tag: 'text', event: '@click', hash: '8udx' },
+    ])
+  })
+
+  it('事件 key：调用与裸引用是不同的源码，key 各自独立', () => {
+    const input =
+      '<template><view><view @click="fn()"></view><text @click="fn"></text></view></template>'
+    const { code, report } = transformVueSource(input, {}, 'x.vue')
+    expect(code).toContain(`__trackClick('nz1m', $event)`)
+    expect(code).toContain(`__trackClick('8udx', $event)`)
+    expect(report!.clicks).toEqual([
+      { tag: 'view', event: '@click', hash: 'nz1m' },
+      { tag: 'text', event: '@click', hash: '8udx' },
+    ])
+  })
+
+  it('事件 key：不同参数的调用是不同的 key', () => {
+    const input =
+      '<template><view><view @click="onTap(1)"></view><text @click="onTap(2)"></text></view></template>'
+    const { code, report } = transformVueSource(input, {}, 'x.vue')
+    expect(code).toContain(`__trackClick('kb41', $event)`)
+    expect(code).toContain(`__trackClick('dz5u', $event)`)
+    expect(report!.clicks).toEqual([
+      { tag: 'view', event: '@click', hash: 'kb41' },
+      { tag: 'text', event: '@click', hash: 'dz5u' },
+    ])
+  })
+
+  it('事件 key：复杂/内联/空表达式都直接哈希为 4 位', () => {
+    const input =
+      '<template><view><view @click="a && b()"></view><text @click="() => go()"></text><button @click=""></button></view></template>'
+    const { code, report } = transformVueSource(input, {}, 'x.vue')
+    expect(code).toContain(`__trackClick('s1uh', $event)`)
+    expect(code).toContain(`__trackClick('e3vu', $event)`)
+    expect(code).toContain(`__trackClick('ntfp', $event)`)
+    expect(report!.clicks).toEqual([
+      { tag: 'view', event: '@click', hash: 's1uh' },
+      { tag: 'text', event: '@click', hash: 'e3vu' },
+      { tag: 'button', event: '@click', hash: 'ntfp' },
+    ])
+  })
+
+  it('事件 key：嵌套括号参数同样直接哈希', () => {
+    const input = '<template><view @click="fn(a(1))"></view></template>'
+    const { code, report } = transformVueSource(input, {}, 'x.vue')
+    expect(code).toContain(`__trackClick('fxxb', $event)`)
+    expect(report!.clicks).toEqual([{ tag: 'view', event: '@click', hash: 'fxxb' }])
+  })
+
+  it('事件 key：含引号的表达式同样直接哈希（无需转义）', () => {
+    const input =
+      "<template><view><view @tap=\"testTap3('AA')\"></view><text @click='fn(\"x\")'></text></view></template>"
+    const { code, report } = transformVueSource(input, {}, 'x.vue')
+    expect(code).toContain(`__trackClick('f4u4', $event)`)
+    expect(code).toContain(`__trackClick('iq04', $event)`)
+    expect(report!.clicks).toEqual([
+      { tag: 'view', event: '@tap', hash: 'f4u4' },
+      { tag: 'text', event: '@click', hash: 'iq04' },
+    ])
   })
 })
 
