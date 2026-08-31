@@ -5,6 +5,7 @@
   "description": "ddmc 埋点 SDK monorepo（编译时包 + 运行时包）",
   "scripts": {
     "build": "pnpm -r --if-present run build",
+    "dev": "pnpm -r --parallel --if-present run dev",
     "test": "vitest run",
     "typecheck": "tsc --noEmit -p packages/shared && tsc --noEmit -p packages/compile && tsc --noEmit -p packages/runtime"
   },
