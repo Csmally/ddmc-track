@@ -3,11 +3,13 @@
  *
  * 当前提供：
  * - trackMixin：全局 mixin，消费编译时包注入的 componentIndex / currentTrackClass，
- *   并提供追踪路径值 currentTrackPath
+ *   并提供追踪路径值 currentTrackPath；页面 onHide 时主动 flush 上报队列
  * - track / $track：统一全局上报入口（install 时挂到 Vue.prototype，任意实例 this.$track 可用）；
- *   组装上报事件（载荷 = 当前实例 data 的全部字段 + otherData）并 POST 到上报端点
- * - configureTrack：上报配置（endpoint 可配）
- * - install：Vue.use(ddmcTrack, options) 入口，内部 Vue.mixin(trackMixin) + Vue.prototype.$track
+ *   组装上报事件（载荷 = 当前实例 data 的全部字段 + otherData）后进本地队列，
+ *   由 report.ts 批量上报（满量 / 定时 / 页面隐藏触发，失败指数退避重试）
+ * - configureTrack：上报配置（endpoint / batchSize / flushInterval）
+ * - install：Vue.use(ddmcTrack, options) 入口：恢复上次未发送事件 + Vue.mixin(trackMixin)
+ *   + Vue.prototype.$track
  *
  * 接入方式（market 的 main.js）：
  *   import ddmcTrack from '@ddmc/track-runtime'
@@ -18,70 +20,18 @@
  */
 import './types'
 import { trackMixin } from './mixin'
+import { configureTrack, enqueue, readUid, restoreQueue } from './report'
+import type { TrackEvent } from './report'
 
 export { trackMixin }
+export { configureTrack, flushPending, restoreQueue } from './report'
+export type { TrackBatch, TrackEvent, TrackOptions } from './report'
 
-// ===== 上报配置 =====
-
-export interface TrackOptions {
-  /** 上报端点（POST 上报事件 JSON，HTTP 契约见 README） */
-  endpoint?: string
-}
-
-const DEFAULT_ENDPOINT = 'http://127.0.0.1:3000/track'
-
-const config: Required<TrackOptions> = { endpoint: DEFAULT_ENDPOINT }
-
-export function configureTrack(options: TrackOptions = {}): void {
-  if (options.endpoint) config.endpoint = options.endpoint
-}
-
-// ===== 上报事件组装与发送 =====
-
-/** uni API 的最小类型面（运行时包不依赖 @dcloudio/types） */
-declare const uni:
-  | {
-      request(options: {
-        url: string
-        method: string
-        data: unknown
-        fail?: (err: unknown) => void
-      }): void
-      getSystemInfoSync(): { uniPlatform?: string }
-      getStorageSync(key: string): unknown
-    }
-  | undefined
-
-/** 从 uni storage 读登录用户 id（market 登录态：userInfo = { id, username, nickname }）。
- *  未登录时各平台 getStorageSync 返回 '' / null（老版本 MP 可能抛异常），防御处理。 */
-function readUid(): number | string | undefined {
-  if (typeof uni === 'undefined') return undefined
-  try {
-    const userInfo = uni.getStorageSync('userInfo') as { id?: number | string } | null | string
-    return userInfo && typeof userInfo === 'object' ? userInfo.id : undefined
-  } catch {
-    return undefined
-  }
-}
-
-/** 上报事件结构（HTTP 契约，ddmc-server 接收端按此实现） */
-export interface TrackEvent {
-  eventType: string
-  eventPath: string
-  /** 事件载荷：当前实例 data 的全部字段 + otherData（手动传入的 data，缺省 {}） */
-  payload: Record<string, unknown>
-  /** 事件发生时间（毫秒时间戳） */
-  timestamp: number
-  /** 运行平台（uni.getSystemInfoSync().uniPlatform，如 h5 / mp-weixin） */
-  platform: string | undefined
-  /** 登录用户 id（uni storage userInfo.id，未登录时无此字段值） */
-  uid: number | string | undefined
-}
+declare const uni: unknown
 
 /**
  * 统一全局上报入口：业务手动埋点兜底与自动采集事件共用。
  * 挂在 Vue.prototype 上时 this 即调用它的组件实例（取 $data 作为载荷）。
- * TODO: 队列/批量/失败重试方案确定后接入，当前即发即送。
  */
 export function track(
   this: { $data?: Record<string, unknown> } | void,
@@ -96,7 +46,6 @@ export function track(
     eventPath,
     payload,
     timestamp: Date.now(),
-    platform: typeof uni !== 'undefined' ? uni.getSystemInfoSync().uniPlatform : undefined,
     uid: readUid(),
   }
   if (typeof uni === 'undefined') {
@@ -104,12 +53,7 @@ export function track(
     console.log('9898 track 上报🚀🚀🚀', eventType, eventPath, payload)
     return
   }
-  uni.request({
-    url: config.endpoint,
-    method: 'POST',
-    data: event,
-    fail: (err) => console.error('[ddmc-track] 上报失败', err),
-  })
+  enqueue(event)
 }
 
 /** Vue2 插件接口（vue 为 optional peerDependency，用最小类型面避免依赖其类型包） */
@@ -118,8 +62,9 @@ interface VueLike {
   prototype: Record<string, unknown>
 }
 
-export function install(vue: VueLike, options?: TrackOptions): void {
+export function install(vue: VueLike, options?: Parameters<typeof configureTrack>[0]): void {
   configureTrack(options)
+  restoreQueue() // 补发上次未发送的事件
   vue.mixin(trackMixin)
   vue.prototype.$track = track
 }

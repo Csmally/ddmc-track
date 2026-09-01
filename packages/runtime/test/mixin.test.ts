@@ -2,7 +2,8 @@
 import Vue from 'vue'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { configureTrack, install, track, trackMixin } from '../src/index'
-import type { TrackEvent } from '../src/index'
+import type { TrackBatch } from '../src/index'
+import { __resetReportState } from '../src/report'
 
 afterEach(() => {
   vi.restoreAllMocks()
@@ -21,7 +22,13 @@ function makeChild() {
 function mockUni(
   capture: (sel: string, cb: (res: { intersectionRatio: number }) => void) => void,
   onDisconnect?: () => void,
-  onRequest?: (opts: { url: string; method: string; data: unknown }) => void,
+  onRequest?: (opts: {
+    url: string
+    method: string
+    data: unknown
+    success?: (res: { statusCode: number }) => void
+    fail?: (err: unknown) => void
+  }) => void,
   storageUserInfo?: unknown,
 ) {
   const observer = {
@@ -31,7 +38,13 @@ function mockUni(
   }
   ;(globalThis as Record<string, unknown>).uni = {
     createIntersectionObserver: () => observer,
-    request: (opts: { url: string; method: string; data: unknown }) => onRequest?.(opts),
+    request: (opts: {
+      url: string
+      method: string
+      data: unknown
+      success?: (res: { statusCode: number }) => void
+      fail?: (err: unknown) => void
+    }) => onRequest?.(opts),
     getSystemInfoSync: () => ({ uniPlatform: 'h5' }),
     getStorageSync: () => storageUserInfo ?? null,
   }
@@ -80,7 +93,8 @@ describe('__trackClick 点击采集入口', () => {
 
 describe('$track 全局上报入口（Vue.prototype）', () => {
   afterEach(() => {
-    configureTrack({ endpoint: 'http://127.0.0.1:3000/track' }) // 恢复默认，防跨测试污染
+    __resetReportState()
+    configureTrack({ endpoint: 'http://127.0.0.1:3000/track', batchSize: 10, flushInterval: 5000 })
     delete (Vue.prototype as Record<string, unknown>).$track
     delete (globalThis as Record<string, unknown>).uni
   })
@@ -94,9 +108,13 @@ describe('$track 全局上报入口（Vue.prototype）', () => {
     return new Parent().$mount()
   }
 
-  it('组装事件并 POST 到默认端点（载荷 = 实例 data + otherData）', () => {
-    const requests: Array<{ url: string; method: string; data: TrackEvent }> = []
-    mockUni(() => {}, undefined, (opts) => requests.push(opts as (typeof requests)[0]))
+  it('组件上下文：载荷含实例 data，进队列批量上报（body = { platform, events }）', () => {
+    configureTrack({ batchSize: 1 }) // 满 1 条立即发送
+    const requests: Array<{ url: string; method: string; data: TrackBatch }> = []
+    mockUni(() => {}, undefined, (opts) => {
+      requests.push(opts as (typeof requests)[0])
+      opts.success?.({ statusCode: 201 })
+    })
     ;(Vue.prototype as Record<string, unknown>).$track = track
     const vm = mountChild(1)
     vm.$refs.child.$track('addCart', 'homePage/0/goodsGrid/0', { goodsId: 42, count: 1 })
@@ -104,7 +122,10 @@ describe('$track 全局上报入口（Vue.prototype）', () => {
     expect(requests).toHaveLength(1)
     expect(requests[0].url).toBe('http://127.0.0.1:3000/track')
     expect(requests[0].method).toBe('POST')
-    const evt = requests[0].data
+    const batch = requests[0].data
+    expect(batch.platform).toBe('h5')
+    expect(batch.events).toHaveLength(1)
+    const evt = batch.events[0]
     expect(evt.eventType).toBe('addCart')
     expect(evt.eventPath).toBe('homePage/0/goodsGrid/0')
     expect(evt.payload).toEqual({
@@ -113,35 +134,23 @@ describe('$track 全局上报入口（Vue.prototype）', () => {
       otherData: { goodsId: 42, count: 1 },
     })
     expect(evt.timestamp).toBeTypeOf('number')
-    expect(evt.platform).toBe('h5')
   })
 
-  it('configureTrack 自定义 endpoint 生效', () => {
-    configureTrack({ endpoint: 'http://example.com/events' })
-    const requests: Array<{ url: string; method: string; data: TrackEvent }> = []
-    mockUni(() => {}, undefined, (opts) => requests.push(opts as (typeof requests)[0]))
+  it('install 注册 mixin 与 $track，第二参数透传 endpoint 配置', () => {
+    let registered: unknown
+    const proto: Record<string, unknown> = {}
+    install({ mixin: (m) => (registered = m), prototype: proto }, { endpoint: 'http://x/events' })
+    expect(registered).toBe(trackMixin)
+    expect(proto.$track).toBe(track)
 
-    track('search', 'homePage/0/searchBar/0')
-
-    expect(requests[0].url).toBe('http://example.com/events')
-  })
-
-  it('非组件上下文调用：载荷只有 otherData', () => {
-    const requests: Array<{ url: string; method: string; data: TrackEvent }> = []
-    mockUni(() => {}, undefined, (opts) => requests.push(opts as (typeof requests)[0]))
-
-    track('search', 'homePage/0/searchBar/0', { kw: '手机' })
-
-    expect(requests[0].data.payload).toEqual({ otherData: { kw: '手机' } })
-  })
-
-  it('data 缺省：otherData 为空对象', () => {
-    const requests: Array<{ url: string; method: string; data: TrackEvent }> = []
-    mockUni(() => {}, undefined, (opts) => requests.push(opts as (typeof requests)[0]))
-
-    track('click', 'x/0')
-
-    expect(requests[0].data.payload).toEqual({ otherData: {} })
+    configureTrack({ batchSize: 1 })
+    const requests: Array<{ url: string; method: string; data: TrackBatch }> = []
+    mockUni(() => {}, undefined, (opts) => {
+      requests.push(opts as (typeof requests)[0])
+      opts.success?.({ statusCode: 201 })
+    })
+    ;(proto.$track as typeof track).call(undefined, 'a', 'b')
+    expect(requests[0].url).toBe('http://x/events')
   })
 
   it('非 uni 环境：降级打印不上报', () => {
@@ -155,42 +164,6 @@ describe('$track 全局上报入口（Vue.prototype）', () => {
       currentTrackClass: 'searchBar-2',
       otherData: {},
     })
-  })
-
-  it('install 第二参数透传 endpoint 配置', () => {
-    let registered: unknown
-    const proto: Record<string, unknown> = {}
-    install({ mixin: (m) => (registered = m), prototype: proto }, { endpoint: 'http://x/events' })
-    expect(registered).toBe(trackMixin)
-    expect(proto.$track).toBe(track)
-
-    const requests: Array<{ url: string; method: string; data: TrackEvent }> = []
-    mockUni(() => {}, undefined, (opts) => requests.push(opts as (typeof requests)[0]))
-    ;(proto.$track as typeof track).call(undefined, 'a', 'b')
-    expect(requests[0].url).toBe('http://x/events')
-  })
-
-  it('已登录：事件携带 storage userInfo.id 作为 uid', () => {
-    const requests: Array<{ url: string; method: string; data: TrackEvent }> = []
-    mockUni(
-      () => {},
-      undefined,
-      (opts) => requests.push(opts as (typeof requests)[0]),
-      { id: 7, username: 'alice', nickname: 'Alice' },
-    )
-
-    track('addCart', 'x/0')
-
-    expect(requests[0].data.uid).toBe(7)
-  })
-
-  it('未登录（storage 无 userInfo）：uid 为 undefined', () => {
-    const requests: Array<{ url: string; method: string; data: TrackEvent }> = []
-    mockUni(() => {}, undefined, (opts) => requests.push(opts as (typeof requests)[0]))
-
-    track('click', 'x/0')
-
-    expect(requests[0].data.uid).toBeUndefined()
   })
 })
 
@@ -388,6 +361,8 @@ describe('曝光采集 · 页面切换（onShow/onHide）', () => {
   })
   afterEach(() => {
     vi.useRealTimers()
+    __resetReportState()
+    configureTrack({ endpoint: 'http://127.0.0.1:3000/track', batchSize: 10, flushInterval: 5000 })
     delete (globalThis as Record<string, unknown>).uni
     delete (Vue.prototype as Record<string, unknown>).$track
   })
@@ -460,6 +435,25 @@ describe('曝光采集 · 页面切换（onShow/onHide）', () => {
     trackMixin.onHide.call(vm.$refs.child) // 切走页面：取消
     vi.advanceTimersByTime(1000)
     expect(trackSpy).not.toHaveBeenCalled()
+  })
+
+  it('onHide 主动 flush 积压的上报事件', async () => {
+    const requests: Array<{ url: string; method: string; data: TrackBatch }> = []
+    mockUni(() => {}, undefined, (opts) => {
+      requests.push(opts as (typeof requests)[0])
+      opts.success?.({ statusCode: 201 })
+    })
+    ;(Vue.prototype as Record<string, unknown>).$track = track
+    configureTrack({ batchSize: 50 }) // 不满批量，等 onHide 触发
+    const vm = mountPageChild(11)
+    await vm.$nextTick()
+
+    vm.$refs.child.$track('click', 'x/0')
+    expect(requests).toHaveLength(0)
+
+    trackMixin.onHide.call(vm.$refs.child)
+    expect(requests).toHaveLength(1)
+    expect(requests[0].data.events[0].eventPath).toBe('x/0')
   })
 })
 

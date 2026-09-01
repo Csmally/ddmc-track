@@ -25,6 +25,7 @@ import {
   TRACK_PATH,
 } from '@ddmc/track-shared'
 import { hidePageExposures, observeExposure, showPageExposures } from './exposure'
+import { flushPending } from './report'
 
 interface TrackVm {
   $options: { name?: string }
@@ -89,5 +90,7 @@ export const trackMixin = {
   },
   onHide(this: TrackVm) {
     hidePageExposures(this[TRACK_PATH])
+    // 页面隐藏：主动发送积压的上报事件（后台 JS 可能被冻结，标准 SDK 做法）
+    flushPending()
   },
 }
