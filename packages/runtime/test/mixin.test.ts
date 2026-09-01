@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
 import Vue from 'vue'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { install, track, trackMixin } from '../src/index'
+import { configureTrack, install, track, trackMixin } from '../src/index'
+import type { TrackEvent } from '../src/index'
 
 afterEach(() => {
   vi.restoreAllMocks()
@@ -15,10 +16,13 @@ function makeChild() {
   })
 }
 
-/** 打桩 uni：捕获 observe 的选择器与回调，手动触发相交结果；可统计 disconnect */
+/** 打桩 uni：捕获 observe 的选择器与回调，手动触发相交结果；
+ *  可统计 disconnect 与 request 上报；storageUserInfo 控制 userInfo 存储值（缺省 null = 未登录） */
 function mockUni(
   capture: (sel: string, cb: (res: { intersectionRatio: number }) => void) => void,
   onDisconnect?: () => void,
+  onRequest?: (opts: { url: string; method: string; data: unknown }) => void,
+  storageUserInfo?: unknown,
 ) {
   const observer = {
     relativeToViewport: () => observer,
@@ -27,6 +31,9 @@ function mockUni(
   }
   ;(globalThis as Record<string, unknown>).uni = {
     createIntersectionObserver: () => observer,
+    request: (opts: { url: string; method: string; data: unknown }) => onRequest?.(opts),
+    getSystemInfoSync: () => ({ uniPlatform: 'h5' }),
+    getStorageSync: () => storageUserInfo ?? null,
   }
 }
 
@@ -73,37 +80,117 @@ describe('__trackClick 点击采集入口', () => {
 
 describe('$track 全局上报入口（Vue.prototype）', () => {
   afterEach(() => {
+    configureTrack({ endpoint: 'http://127.0.0.1:3000/track' }) // 恢复默认，防跨测试污染
     delete (Vue.prototype as Record<string, unknown>).$track
+    delete (globalThis as Record<string, unknown>).uni
   })
 
-  it('三参数（eventType/eventPath/data）可调用（占位实现，无外部副作用）', () => {
-    ;(Vue.prototype as Record<string, unknown>).$track = track
+  function mountChild(index: number) {
     const Child = makeChild()
     const Parent = Vue.extend({
       components: { Child },
-      render: (h) => h('child', { ref: 'child', attrs: { componentIndex: 1 } }),
+      render: (h) => h('child', { ref: 'child', attrs: { componentIndex: index } }),
     })
-    const vm = new Parent().$mount()
+    return new Parent().$mount()
+  }
 
-    expect(() =>
-      vm.$refs.child.$track('addCart', 'homePage/0/goodsGrid/0', { goodsId: 42, count: 1 }),
-    ).not.toThrow()
-  })
-
-  it('data 缺省可调用', () => {
+  it('组装事件并 POST 到默认端点（载荷 = 实例 data + otherData）', () => {
+    const requests: Array<{ url: string; method: string; data: TrackEvent }> = []
+    mockUni(() => {}, undefined, (opts) => requests.push(opts as (typeof requests)[0]))
     ;(Vue.prototype as Record<string, unknown>).$track = track
-    const Child = makeChild()
-    const Parent = Vue.extend({
-      components: { Child },
-      render: (h) => h('child', { ref: 'child' }),
-    })
-    const vm = new Parent().$mount()
+    const vm = mountChild(1)
+    vm.$refs.child.$track('addCart', 'homePage/0/goodsGrid/0', { goodsId: 42, count: 1 })
 
-    expect(() => vm.$refs.child.$track('click', 'x/0')).not.toThrow()
+    expect(requests).toHaveLength(1)
+    expect(requests[0].url).toBe('http://127.0.0.1:3000/track')
+    expect(requests[0].method).toBe('POST')
+    const evt = requests[0].data
+    expect(evt.eventType).toBe('addCart')
+    expect(evt.eventPath).toBe('homePage/0/goodsGrid/0')
+    expect(evt.payload).toEqual({
+      currentTrackPath: 'searchBar/1',
+      currentTrackClass: 'searchBar-1',
+      otherData: { goodsId: 42, count: 1 },
+    })
+    expect(evt.timestamp).toBeTypeOf('number')
+    expect(evt.platform).toBe('h5')
   })
 
-  it('非组件上下文直接调用 track', () => {
-    expect(() => track('search', 'homePage/0/searchBar/0')).not.toThrow()
+  it('configureTrack 自定义 endpoint 生效', () => {
+    configureTrack({ endpoint: 'http://example.com/events' })
+    const requests: Array<{ url: string; method: string; data: TrackEvent }> = []
+    mockUni(() => {}, undefined, (opts) => requests.push(opts as (typeof requests)[0]))
+
+    track('search', 'homePage/0/searchBar/0')
+
+    expect(requests[0].url).toBe('http://example.com/events')
+  })
+
+  it('非组件上下文调用：载荷只有 otherData', () => {
+    const requests: Array<{ url: string; method: string; data: TrackEvent }> = []
+    mockUni(() => {}, undefined, (opts) => requests.push(opts as (typeof requests)[0]))
+
+    track('search', 'homePage/0/searchBar/0', { kw: '手机' })
+
+    expect(requests[0].data.payload).toEqual({ otherData: { kw: '手机' } })
+  })
+
+  it('data 缺省：otherData 为空对象', () => {
+    const requests: Array<{ url: string; method: string; data: TrackEvent }> = []
+    mockUni(() => {}, undefined, (opts) => requests.push(opts as (typeof requests)[0]))
+
+    track('click', 'x/0')
+
+    expect(requests[0].data.payload).toEqual({ otherData: {} })
+  })
+
+  it('非 uni 环境：降级打印不上报', () => {
+    const spy = vi.spyOn(console, 'log').mockImplementation(() => {})
+    ;(Vue.prototype as Record<string, unknown>).$track = track
+    const vm = mountChild(2)
+    vm.$refs.child.$track('click', 'x/0')
+
+    expect(spy).toHaveBeenCalledWith('9898 track 上报🚀🚀🚀', 'click', 'x/0', {
+      currentTrackPath: 'searchBar/2',
+      currentTrackClass: 'searchBar-2',
+      otherData: {},
+    })
+  })
+
+  it('install 第二参数透传 endpoint 配置', () => {
+    let registered: unknown
+    const proto: Record<string, unknown> = {}
+    install({ mixin: (m) => (registered = m), prototype: proto }, { endpoint: 'http://x/events' })
+    expect(registered).toBe(trackMixin)
+    expect(proto.$track).toBe(track)
+
+    const requests: Array<{ url: string; method: string; data: TrackEvent }> = []
+    mockUni(() => {}, undefined, (opts) => requests.push(opts as (typeof requests)[0]))
+    ;(proto.$track as typeof track).call(undefined, 'a', 'b')
+    expect(requests[0].url).toBe('http://x/events')
+  })
+
+  it('已登录：事件携带 storage userInfo.id 作为 uid', () => {
+    const requests: Array<{ url: string; method: string; data: TrackEvent }> = []
+    mockUni(
+      () => {},
+      undefined,
+      (opts) => requests.push(opts as (typeof requests)[0]),
+      { id: 7, username: 'alice', nickname: 'Alice' },
+    )
+
+    track('addCart', 'x/0')
+
+    expect(requests[0].data.uid).toBe(7)
+  })
+
+  it('未登录（storage 无 userInfo）：uid 为 undefined', () => {
+    const requests: Array<{ url: string; method: string; data: TrackEvent }> = []
+    mockUni(() => {}, undefined, (opts) => requests.push(opts as (typeof requests)[0]))
+
+    track('click', 'x/0')
+
+    expect(requests[0].data.uid).toBeUndefined()
   })
 })
 
