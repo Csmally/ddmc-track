@@ -80,16 +80,14 @@ export const trackMixin = {
     this[TRACK_CLASS] = path.replace(/\//g, '-')
   },
   mounted(this: TrackVm) {
-    // console.log(`9898--mounted--${this.$options.name}`)
     // 曝光观察：根元素进入视口并停留满 300ms 上报一次（机制详见 exposure.ts）
     observeExposure(this)
   },
   onShow(this: TrackVm) {
-    // console.log(`9898--onShow--${this.$options.name}`)
     // uni 页面生命周期：页面返回前台时重新评估曝光（组件不重新 mounted）
-    showPageExposures(this[TRACK_PATH], this.$options.name)
+    showPageExposures(this[TRACK_PATH])
   },
   onHide(this: TrackVm) {
-    hidePageExposures(this[TRACK_PATH], this.$options.name)
+    hidePageExposures(this[TRACK_PATH])
   },
 }

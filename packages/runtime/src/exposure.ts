@@ -111,7 +111,7 @@ export function observeExposure(vm: ExposureVm): void {
 
 /** 页面隐藏（mixin onHide 调用）：取消该页所有未决计时。
  *  不复位 wasVisible——保留"离开时是否可见"的状态，供返回页面时判断。 */
-export function hidePageExposures(pagePath: string, pageName?: string): void {
+export function hidePageExposures(pagePath: string): void {
   for (const entry of entries) {
     if (entry.pagePath !== pagePath) continue
     cancelDwell(entry)
@@ -120,7 +120,7 @@ export function hidePageExposures(pagePath: string, pageName?: string): void {
 
 /** 页面显示（mixin onShow 调用）：离开时可见的条目重新开始停留计时，
  *  满 300ms 后再次上报（返回页面可见组件再次曝光）；不可见的等观察器滚动触发。 */
-export function showPageExposures(pagePath: string, pageName?: string): void {
+export function showPageExposures(pagePath: string): void {
   for (const entry of entries) {
     if (entry.pagePath !== pagePath) continue
     if (entry.wasVisible) startDwell(entry)
