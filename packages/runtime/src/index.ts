@@ -35,7 +35,7 @@ export function track(
 ): void {
   const vmData = (this && this.$data) || {}
   const payload = { ...vmData, otherData: data ?? {} }
-  console.log('9898 runtime track', eventType, eventPath)
+  console.log('9898 track 上报🚀🚀🚀', eventType, eventPath, payload)
 }
 
 /** Vue2 插件接口（vue 为 optional peerDependency，用最小类型面避免依赖其类型包） */

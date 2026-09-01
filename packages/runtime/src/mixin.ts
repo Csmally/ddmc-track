@@ -11,8 +11,10 @@
  *   形态如 home.vue 的 search-bar：homePage/0/pageContent/0/searchBar/0。
  * - __trackClick(hash)：编译期点击包装注入的调用目标（先于原 handler 执行），
  *   把点击事件汇入 $track：eventType 'click'，eventPath = currentTrackPath + '/' + hash。
- * - mounted：发起曝光观察（exposure.ts）——根元素每次进入视口上报一次 exposure
- *   （离开视口再露出会再报）。
+ * - mounted：发起曝光观察（exposure.ts）——根元素在视口内持续停留满 300ms
+ *   才上报一次 exposure（未满时长离开取消，再进入重新计时；已报后离开再进入再报）。
+ * - onShow/onHide（uni 页面生命周期，仅页面实例触发）：页面被切换走再返回时页面栈
+ *   保活、组件不重新 mounted，这里取消/重新评估该页的曝光停留计时。
  *
  * 注意：MP 端已验证 slot 子组件的 $parent 是 slot 宿主（pageContent）。
  */
@@ -22,7 +24,7 @@ import {
   TRACK_CLICK_METHOD,
   TRACK_PATH,
 } from '@ddmc/track-shared'
-import { observeExposure } from './exposure'
+import { hidePageExposures, observeExposure, showPageExposures } from './exposure'
 
 interface TrackVm {
   $options: { name?: string }
@@ -72,12 +74,22 @@ export const trackMixin = {
     },
   },
   created(this: TrackVm) {
+    // console.log(`9898--created--${this.$options.name}`)
     const path = collectTrackParts(this).join('/')
     this[TRACK_PATH] = path
     this[TRACK_CLASS] = path.replace(/\//g, '-')
   },
   mounted(this: TrackVm) {
-    // 曝光观察：根元素进入视口即上报一次（机制详见 exposure.ts，非 uni 环境自动跳过）
+    // console.log(`9898--mounted--${this.$options.name}`)
+    // 曝光观察：根元素进入视口并停留满 300ms 上报一次（机制详见 exposure.ts）
     observeExposure(this)
+  },
+  onShow(this: TrackVm) {
+    // console.log(`9898--onShow--${this.$options.name}`)
+    // uni 页面生命周期：页面返回前台时重新评估曝光（组件不重新 mounted）
+    showPageExposures(this[TRACK_PATH], this.$options.name)
+  },
+  onHide(this: TrackVm) {
+    hidePageExposures(this[TRACK_PATH], this.$options.name)
   },
 }

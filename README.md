@@ -145,9 +145,10 @@ this.$track('addCart', 'homePage/0/goodsGrid/0', { goodsId: 42, count: 1 })
 - **props.componentIndex**：mixin 声明了该 prop（编译时包注入的 `:componentIndex="N"` 经 Vue2 attrs→props 匹配进入组件），组件内可直接 `this.componentIndex` 读取
 - **data.currentTrackPath**：追踪路径值，沿 `$parent` 链上溯拼接——段 = 驼峰 `$options.name` 与 componentIndex（**未注入时按 0**，页面实例即此形态，如 `homePage/0`）；App 实例终止链（自身路径为空）；无 name 的实例跳过段、链继续。home.vue 示例：`homePage/0/pageContent/0/searchBar/0`、`homePage/0/pageContent/0/bannerSwiper/1`
 - **data.currentTrackClass**：`currentTrackPath` 的类名安全形态（`/` 换成 `-`，如 `homePage-0-pageContent-0-bannerSwiper-1`），绑定到组件根元素 class 上（用 data 而非 computed：小程序 wx data 只收集 data/methods，mixin 的 computed 不会进 WXML 绑定）
-- **Vue.prototype.$track(eventType, eventPath, data?)**：统一全局上报入口（install 时挂载，任意组件实例可 `this.$track` 调用；业务手动埋点兜底，自动采集事件最终也走这里）。**上报载荷 = 当前实例 data 的全部字段 + `otherData`**（otherData 即可选参数 data，缺省 `{}`；非组件上下文调用时无实例 data 字段）；当前为占位打印实现，队列/上报/会话/上下文方案确定后接入
+- **Vue.prototype.$track(eventType, eventPath, data?)**：统一全局上报入口（install 时挂载，任意组件实例可 `this.$track` 调用；业务手动埋点兜底，自动采集事件最终也走这里）。**上报载荷 = 当前实例 data 的全部字段 + `otherData`**（otherData 即可选参数 data，缺省 `{}`；非组件上下文调用时无实例 data 字段）；当前为占位打印实现（只打印 eventType/eventPath，载荷待上报链路消费），队列/上报/会话/上下文方案确定后接入
 - **methods.__trackClick(hash)**：编译期点击包装注入的调用目标（先于原 handler 执行），把点击事件汇入 `$track`：eventType 为 `click`，eventPath = currentTrackPath + `/` + hash
-- **曝光采集（mounted 自动）**：组件根元素每次进入视口都上报 `$track('exposure', currentTrackPath, {})`——只按"不可见 → 可见"跳变上报（ratio 连续变化不重复报），离开视口再露出会再报；同一路径不去重（v-for 各实例独立上报）；观察器随组件销毁断开；基于 `uni.createIntersectionObserver`（组件级作用域，按编译期注入的 currentTrackClass 定位根元素），非 uni 环境自动跳过
+- **曝光采集（mounted 自动）**：组件根元素须在视口内**持续停留满 300ms** 才上报 `$track('exposure', currentTrackPath)`——进入视口即起计时（ratio 连续变化不重置），未满时长离开取消，已报后离开再进入（再停留满时长）再报；同一路径不去重（v-for 各实例独立上报）；观察器随组件销毁断开；基于 `uni.createIntersectionObserver`（组件级作用域，按编译期注入的 currentTrackClass 定位根元素），非 uni 环境自动跳过
+- **页面切换（uni 页面生命周期 onShow/onHide）**：页面切走时（onHide）只取消该页未决停留计时、保留各条目 wasVisible 状态；返回页面时（onShow，页面栈保活、组件不重新 mounted）对离开时可见（wasVisible === true）的条目重新计时上报——A → B → 返回 A，A 页可见组件会再次曝光；离开时不可见的条目等观察器滚动进出正常触发
 - 类型增强随包发布：消费方获得 `this.componentIndex` / `this.currentTrackClass` / `this.currentTrackPath` / `this.$track` 的类型提示
 - **平台注意**：MP 端已验证 slot 子组件的 `$parent` 是 slot 宿主（pageContent），路径含 pageContent 段；H5 端（uni-h5 运行时）链式行为待接入 market 时验证
 
